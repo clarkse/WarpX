@@ -9,6 +9,7 @@
 
 #include "LatticeElementFinder.H"
 #include "LatticeElements/Drift.H"
+#include "LatticeElements/HardEdgedDipole.H"
 #include "LatticeElements/HardEdgedQuadrupole.H"
 #include "LatticeElements/HardEdgedPlasmaLens.H"
 
@@ -67,6 +68,7 @@ public:
 
     /* All of the available lattice element types */
     Drift h_drift;
+    HardEdgedDipole h_dipo;
     HardEdgedQuadrupole h_quad;
     HardEdgedPlasmaLens h_plasmalens;
 

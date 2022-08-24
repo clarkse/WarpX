@@ -6,8 +6,10 @@
  */
 #include "WarpX.H"
 #include "LatticeElementFinder.H"
+#include "LatticeElements/HardEdgedDipole.H"
 #include "LatticeElements/HardEdgedQuadrupole.H"
 #include "LatticeElements/HardEdgedPlasmaLens.H"
+#include "LatticeElements/Solenoid.H"
 
 #include <AMReX_ParmParse.H>
 #include <AMReX_REAL.H>
@@ -41,12 +43,20 @@ LatticeElementFinder::AllocateIndices (AcceleratorLattice const& accelerator_lat
     // Allocate the space for the indices for each element type.
     // Note that this uses m_nz since the information is saved per node.
 
+    if (accelerator_lattice.h_dipo.nelements > 0) {
+        d_dipo_indices.resize(m_nz);
+    }
+
     if (accelerator_lattice.h_quad.nelements > 0) {
         d_quad_indices.resize(m_nz);
     }
 
     if (accelerator_lattice.h_plasmalens.nelements > 0) {
         d_plasmalens_indices.resize(m_nz);
+    }
+
+    if (accelerator_lattice.h_solenoid.nelements > 0) {
+        d_solenoid_indices.resize(m_nz);
     }
 }
 
@@ -63,6 +73,12 @@ LatticeElementFinder::UpdateIndices (int const lev, amrex::MFIter const& a_mfi,
     m_zmin = WarpX::LowerCorner(box, lev, 0._rt)[2];
     m_time = warpx.gett_new(lev);
 
+    if (accelerator_lattice.h_dipo.nelements > 0) {
+        setup_lattice_indices(accelerator_lattice.h_dipo.d_zs,
+                              accelerator_lattice.h_dipo.d_ze,
+                              d_dipo_indices);
+    }
+
     if (accelerator_lattice.h_quad.nelements > 0) {
         setup_lattice_indices(accelerator_lattice.h_quad.d_zs,
                               accelerator_lattice.h_quad.d_ze,
@@ -70,6 +86,12 @@ LatticeElementFinder::UpdateIndices (int const lev, amrex::MFIter const& a_mfi,
     }
 
     if (accelerator_lattice.h_plasmalens.nelements > 0) {
+        setup_lattice_indices(accelerator_lattice.h_plasmalens.d_zs,
+                              accelerator_lattice.h_plasmalens.d_ze,
+                              d_plasmalens_indices);
+    }
+
+    if (accelerator_lattice.h_solenoid.nelements > 0) {
         setup_lattice_indices(accelerator_lattice.h_plasmalens.d_zs,
                               accelerator_lattice.h_plasmalens.d_ze,
                               d_plasmalens_indices);
@@ -110,14 +132,24 @@ LatticeElementFinderDevice::InitLatticeElementFinderDevice (WarpXParIter const& 
     m_dz = h_finder.m_dz;
     m_time = h_finder.m_time;
 
+    if (accelerator_lattice.h_dipo.nelements > 0) {
+        d_dipo = accelerator_lattice.h_dipo.GetDeviceInstance();
+        d_dipo_indices = h_finder.d_dipo_indices;
+    }
+
     if (accelerator_lattice.h_quad.nelements > 0) {
         d_quad = accelerator_lattice.h_quad.GetDeviceInstance();
-        d_quad_indices_arr = h_finder.d_quad_indices.data();
+        d_quad_indices = h_finder.d_quad_indices;
     }
 
     if (accelerator_lattice.h_plasmalens.nelements > 0) {
         d_plasmalens = accelerator_lattice.h_plasmalens.GetDeviceInstance();
-        d_plasmalens_indices_arr = h_finder.d_plasmalens_indices.data();
+        d_plasmalens_indices = h_finder.d_plasmalens_indices;
+    }
+
+    if (accelerator_lattice.h_solenoid.nelements > 0) {
+        d_solenoid = accelerator_lattice.h_solenoid.GetDeviceInstance();
+        d_solenoid_indices = h_finder.d_solenoid_indices;
     }
 
 }

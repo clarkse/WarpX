@@ -7,6 +7,7 @@
 #ifndef WARPX_ACCELERATORLATTICE_LATTICEELEMENTS_LATTICEELEMENTFINDER_H_
 #define WARPX_ACCELERATORLATTICE_LATTICEELEMENTS_LATTICEELEMENTFINDER_H_
 
+#include "LatticeElements/HardEdgedDippole.H"
 #include "LatticeElements/HardEdgedQuadrupole.H"
 #include "LatticeElements/HardEdgedPlasmaLens.H"
 #include "Particles/Pusher/GetAndSetPosition.H"
@@ -74,8 +75,10 @@ struct LatticeElementFinder
                                                         AcceleratorLattice const& accelerator_lattice);
 
     /* The index lookup tables for each lattice element type */
-    amrex::Gpu::DeviceVector<int> d_quad_indices;
-    amrex::Gpu::DeviceVector<int> d_plasmalens_indices;
+    amrex::Gpu::DeviceVector< amrex::Gpu::DeviceVector<int> > d_dipo_indices;
+    amrex::Gpu::DeviceVector< amrex::Gpu::DeviceVector<int> > d_quad_indices;
+    amrex::Gpu::DeviceVector< amrex::Gpu::DeviceVector<int> > d_plasmalens_indices;
+    amrex::Gpu::DeviceVector< amrex::Gpu::DeviceVector<int> > d_solenoid_indices;
 
     /**
      * \brief Fill in the index lookup tables
@@ -87,15 +90,12 @@ struct LatticeElementFinder
      */
     void setup_lattice_indices (amrex::Gpu::DeviceVector<amrex::Real> const & zs,
                                 amrex::Gpu::DeviceVector<amrex::Real> const & ze,
-                                amrex::Gpu::DeviceVector<int> & indices)
+                                amrex::Gpu::DeviceVector< amrex::Gpu::DeviceVector<int> > & indices)
     {
 
         using namespace amrex::literals;
 
         int nelements = static_cast<int>(zs.size());
-        amrex::Real const * zs_arr = zs.data();
-        amrex::Real const * ze_arr = ze.data();
-        int * indices_arr = indices.data();
 
         amrex::Real const zmin = m_zmin;
         amrex::Real const dz = m_dz;
@@ -116,7 +116,7 @@ struct LatticeElementFinder
                 }
 
                 // Find the index to the element that is closest to the grid cell.
-                // For now, this assumes that there is no overlap among elements of the same type.
+                // Append index to indices list
                 for (int ie = 0 ; ie < nelements ; ie++) {
                     // Find the mid points between element ie and the ones before and after it.
                     // The first and last element need special handling.
@@ -124,16 +124,17 @@ struct LatticeElementFinder
                     if (ie == 0) {
                         zcenter_left = std::numeric_limits<amrex::Real>::lowest();
                     } else {
-                        zcenter_left = 0.5_rt*(ze_arr[ie-1] + zs_arr[ie]);
+                        zcenter_left = 0.5_rt*(ze[ie-1] + zs[ie]);
                     }
                     if (ie < nelements - 1) {
-                        zcenter_right = 0.5_rt*(ze_arr[ie] + zs_arr[ie+1]);
+                        zcenter_right = 0.5_rt*(ze[ie] + zs[ie+1]);
                     } else {
                         zcenter_right = std::numeric_limits<amrex::Real>::max();
                     }
 
                     if (zcenter_left <= z_node && z_node < zcenter_right) {
-                        indices_arr[iz] = ie;
+                        // Push element index onto the indices vector
+                        indices[iz].push_back(ie);
                     }
 
                 }
@@ -179,12 +180,15 @@ struct LatticeElementFinderDevice
     const amrex::ParticleReal* AMREX_RESTRICT m_uz = nullptr;
 
     /* Device level instances for each lattice element type */
+    HardEdgedDipoleDevice d_dipo;
     HardEdgedQuadrupoleDevice d_quad;
     HardEdgedPlasmaLensDevice d_plasmalens;
+    SolenoidDevice d_solenoid;
 
-    /* Device level index lookup tables for each element type */
-    int const* d_quad_indices_arr = nullptr;
-    int const* d_plasmalens_indices_arr = nullptr;
+    amrex::Gpu::DeviceVector< amrex::Gpu::DeviceVector<int> > const& d_dipo_indices;
+    amrex::Gpu::DeviceVector< amrex::Gpu::DeviceVector<int> > const& d_quad_indices;
+    amrex::Gpu::DeviceVector< amrex::Gpu::DeviceVector<int> > const& d_plasmalens_indices;
+    amrex::Gpu::DeviceVector< amrex::Gpu::DeviceVector<int> > const& d_solenoid_indices;
 
     /**
      * \brief Gather the field for the particle from the lattice elements
@@ -230,9 +234,19 @@ struct LatticeElementFinderDevice
         amrex::ParticleReal By_sum = 0._rt;
         amrex::ParticleReal Bz_sum = 0._rt;
 
+        if (d_dipo.nelements > 0) {
+            for (int const & ielement : d_dipo_indices[iz]) {
+                amrex::ParticleReal Ex, Ey, Bx, By;
+                d_dipo.get_field(ielement, x, y, z, zpvdt, Ex, Ey, Bx, By);
+                Ex_sum += Ex;
+                Ey_sum += Ey;
+                Bx_sum += Bx;
+                By_sum += By;
+            }
+        }
+
         if (d_quad.nelements > 0) {
-            if (d_quad_indices_arr[iz] > -1) {
-                int ielement = d_quad_indices_arr[iz];
+            for (int const & ielement : d_quad_indices[iz]) {
                 amrex::ParticleReal Ex, Ey, Bx, By;
                 d_quad.get_field(ielement, x, y, z, zpvdt, Ex, Ey, Bx, By);
                 Ex_sum += Ex;
@@ -243,8 +257,18 @@ struct LatticeElementFinderDevice
         }
 
         if (d_plasmalens.nelements > 0) {
-            if (d_plasmalens_indices_arr[iz] > -1) {
-                int ielement = d_plasmalens_indices_arr[iz];
+            for (int const & ielement : d_plasmalens_indices[iz]) {
+                amrex::ParticleReal Ex, Ey, Bx, By;
+                d_plasmalens.get_field(ielement, x, y, z, zpvdt, Ex, Ey, Bx, By);
+                Ex_sum += Ex;
+                Ey_sum += Ey;
+                Bx_sum += Bx;
+                By_sum += By;
+            }
+        }
+
+        if (d_solenoid.nelements > 0) {
+            for (int const & ielement : d_solenoid_indices[iz]) {
                 amrex::ParticleReal Ex, Ey, Bx, By;
                 d_plasmalens.get_field(ielement, x, y, z, zpvdt, Ex, Ey, Bx, By);
                 Ex_sum += Ex;

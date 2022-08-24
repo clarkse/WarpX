@@ -46,6 +46,9 @@ AcceleratorLattice::ReadLattice (std::string const & root_name, amrex::Real & z_
         if (element_type == "drift") {
             h_drift.AddElement(pp_element, z_location);
         }
+        else if (element_type == "dipole") {
+            h_quad.AddElement(pp_element, z_location);
+        }
         else if (element_type == "quad") {
             h_quad.AddElement(pp_element, z_location);
         }
