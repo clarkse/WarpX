@@ -26,8 +26,17 @@ void HybridPICModel::ReadParameters ()
     const ParmParse pp_hybrid("hybrid_pic_model");
 
     // The B-field update is subcycled to improve stability - the number
-    // of sub steps can be specified by the user (defaults to 50).
+    // of sub steps can be specified by the user (defaults to 10).
     utils::parser::queryWithParser(pp_hybrid, "substeps", m_substeps);
+
+    // Query whether to include displcement term and to subcycle E/B with cyclic leapfrog
+    // Defualts to off since will require many more field solves, however vacuum regions
+    // can support EM waves.
+    utils::parser::queryWithParser(
+        pp_hybrid,
+        "include_displacement_current",
+        m_include_displacement_current
+    );
 
     // The hybrid model requires an electron temperature, reference density
     // and exponent to be given. These values will be used to calculate the

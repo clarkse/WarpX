@@ -160,6 +160,11 @@ public:
     // Declare variables to hold hybrid-PIC model parameters
     /** Number of substeps to take when evolving B */
     int m_substeps = 10;
+    
+    /** When displacement current is included, E/B fields are evolved with many more substeps since EM waves need
+     * to be resolved. Substeps should resolve the EM courant condition of c*k*dt_substep <= 2.
+     */
+    bool m_include_displacement_current = false;
 
     /** Electron temperature in eV */
     amrex::Real m_elec_temp;

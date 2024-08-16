@@ -56,6 +56,9 @@ void WarpX::HybridPICEvolveFields ()
     // Get requested number of substeps to use
     const int sub_steps = m_hybrid_pic_model->m_substeps;
 
+    const bool include_displacement = 
+        m_hybrid_pic_model->m_include_displacement_current;
+
     // Get the external current
     m_hybrid_pic_model->GetCurrentExternal(m_edge_lengths);
 
@@ -96,12 +99,18 @@ void WarpX::HybridPICEvolveFields ()
     // momentum equation
     for (int sub_step = 0; sub_step < sub_steps; sub_step++)
     {
-        m_hybrid_pic_model->BfieldEvolveRK(
-            Bfield_fp, Efield_fp, current_fp_temp, rho_fp_temp,
-            m_edge_lengths, 0.5_rt/sub_steps*dt[0],
-            DtType::FirstHalf, guard_cells.ng_FieldSolver,
-            WarpX::sync_nodal_points
-        );
+        if (include_displacement) {
+            // In this case we will do a cyclic leapfrog update since
+            // it is expected that
+
+        } else {
+            m_hybrid_pic_model->BfieldEvolveRK(
+                Bfield_fp, Efield_fp, current_fp_temp, rho_fp_temp,
+                m_edge_lengths, 0.5_rt/sub_steps*dt[0],
+                DtType::FirstHalf, guard_cells.ng_FieldSolver,
+                WarpX::sync_nodal_points
+            );
+        }
     }
 
     // Average rho^{n} and rho^{n+1} to get rho^{n+1/2} in rho_fp_temp
