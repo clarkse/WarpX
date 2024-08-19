@@ -1666,19 +1666,19 @@ class LoadInitialField(picmistandard.PICMI_LoadGriddedField):
             pywarpx.warpx.E_ext_grid_init_style = 'read_from_file'
         if self.load_B:
             pywarpx.warpx.B_ext_grid_init_style = 'read_from_file'
-            pywarpx.warpx.do_divb_cleaning_external = True
+            pywarpx.warpx.do_divb_cleaning_external = self.do_divb_cleaning_external
 
 class LoadInitialFieldFromPython:
     """
     Field Initializer that takes a function handle to be registered as a callback.
     The function is expected to write the E and/or B fields into the
     fields.Bx/y/zFPExternalWrapper() multifab. The callback is installed
-    in the beforeInitEsolve hook. This should operate identically to laoding from
+    in the beforeInitEsolve hook. This should operate identically to loading from
     a file.
 
     Parameters
     ----------
-    warpx_do_divb_cleaning_external: bool, default=False
+    warpx_do_divb_cleaning_external: bool, default=True
         Flag that controls whether or not to execute the Projection based B-field divergence cleaner.
 
     load_E: bool, default=True
@@ -1708,11 +1708,11 @@ class LoadInitialFieldFromPython:
 class AnalyticInitialField(picmistandard.PICMI_AnalyticAppliedField):
     def init(self, kw):
         self.mangle_dict = None
-        self.maxlevel_extEMfield_init = kw.pop('warpx_maxlevel_extEMfield_init', None);
+        self.maxlevel_extEMfield_init = kw.pop('warpx_maxlevel_extEMfield_init', None)
 
     def applied_field_initialize_inputs(self):
         # Note that lower and upper_bound are not used by WarpX
-        pywarpx.warpx.maxlevel_extEMfield_init = self.maxlevel_extEMfield_init;
+        pywarpx.warpx.maxlevel_extEMfield_init = self.maxlevel_extEMfield_init
 
         if self.mangle_dict is None:
             # Only do this once so that the same variables are used in this distribution
