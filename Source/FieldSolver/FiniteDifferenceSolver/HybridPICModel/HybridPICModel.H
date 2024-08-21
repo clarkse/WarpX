@@ -138,6 +138,29 @@ public:
 
     /**
      * \brief
+     * Advance E & B fields including displacement current
+     * (kinetic-fluid hybrid model).
+     */
+    void EvolveEBFieldsDisplacement (
+        amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>>& Bfield,
+        amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>>& Efield,
+        amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& Jfield,
+        amrex::Vector<std::unique_ptr<amrex::MultiFab>> const& rhofield,
+        amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& edge_lengths,
+        amrex::Real dt, DtType dt_type,
+        IntVect ng, std::optional<bool> nodal_sync );
+
+    void EvolveEBFieldsDisplacement (
+        amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>>& Bfield,
+        amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>>& Efield,
+        amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& Jfield,
+        amrex::Vector<std::unique_ptr<amrex::MultiFab>> const& rhofield,
+        amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& edge_lengths,
+        amrex::Real dt, int lev, DtType dt_type,
+        IntVect ng, std::optional<bool> nodal_sync );
+
+    /**
+     * \brief
      * Function to calculate the electron pressure at a given timestep type
      * using the simulation charge density. Used in the Ohm's law solver
      * (kinetic-fluid hybrid model).

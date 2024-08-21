@@ -100,9 +100,14 @@ void WarpX::HybridPICEvolveFields ()
     for (int sub_step = 0; sub_step < sub_steps; sub_step++)
     {
         if (include_displacement) {
-            // In this case we will do a cyclic leapfrog update since
-            // it is expected that
-
+            // In this case we will do a subcycled cyclic leapfrog update since
+            // it is expected that light waves will be resolved
+            m_hybrid_pic_model->EvolveEBFieldsDisplacement(
+                Bfield_fp, Efield_fp, current_fp_temp, rho_fp_temp,
+                m_edge_lengths, 0.5_rt/sub_steps*dt[0],
+                guard_cells.ng_FieldSolver,
+                WarpX::sync_nodal_points
+            );
         } else {
             m_hybrid_pic_model->BfieldEvolveRK(
                 Bfield_fp, Efield_fp, current_fp_temp, rho_fp_temp,

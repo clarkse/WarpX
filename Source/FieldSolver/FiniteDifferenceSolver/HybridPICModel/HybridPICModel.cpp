@@ -1,8 +1,9 @@
-/* Copyright 2023 The WarpX Community
+/* Copyright 2023-2024 The WarpX Community
  *
  * This file is part of WarpX.
  *
  * Authors: Roelof Groenewald (TAE Technologies)
+ *          S. Eric CLark (Helion Energy, Inc.)
  *
  * License: BSD-3-Clause-LBNL
  */
@@ -703,5 +704,49 @@ void HybridPICModel::FieldPush (
     warpx.FillBoundaryE(ng, nodal_sync);
     // Push forward the B-field using Faraday's law
     warpx.EvolveB(dt, dt_type);
+    warpx.FillBoundaryB(ng, nodal_sync);
+}
+
+void HybridPICModel::EvolveEBFieldsDisplacement (
+    amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>>& Bfield,
+    amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>>& Efield,
+    amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& Jfield,
+    amrex::Vector<std::unique_ptr<amrex::MultiFab>> const& rhofield,
+    amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& edge_lengths,
+    amrex::Real dt,
+    IntVect ng, std::optional<bool> nodal_sync )
+    auto& warpx = WarpX::GetInstance();
+    for (int lev = 0; lev <= warpx.finestLevel(); ++lev)
+    {
+        EvolveEBFieldsDisplacement(
+            Bfield, Efield, Jfield, rhofield, edge_lengths, dt, lev,
+            ng, nodal_sync
+        );
+    }
+
+void HybridPICModel::EvolveEBFieldsDisplacement (
+    amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>>& Bfield,
+    amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>>& Efield,
+    amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& Jfield,
+    amrex::Vector<std::unique_ptr<amrex::MultiFab>> const& rhofield,
+    amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& edge_lengths,
+    amrex::Real dt, int lev, DtType dt_type,
+    IntVect ng, std::optional<bool> nodal_sync )
+{
+    auto& warpx = WarpX::GetInstance();
+
+    // Push forward the B-field first half time step using Faraday's law
+    warpx.EvolveB(lev, 0.5*dt, DtType::FirstHalf);
+    warpx.FillBoundaryB(lev, ng, nodal_sync);
+
+    // Calculate J = curl x B / mu0
+    CalculateCurrentAmpere(Bfield, edge_lengths);
+
+    // Calculate the E-field from Ohm's law
+    HybridPICEvolveEDisplacement(Efield, Jfield, Bfield, rhofield, edge_lengths, true);
+    warpx.FillBoundaryE(ng, nodal_sync);
+
+    // Push forward the B-field using Faraday's law
+    warpx.EvolveB(lev, 0.5*dt, DtType::SecondHalf);
     warpx.FillBoundaryB(ng, nodal_sync);
 }
