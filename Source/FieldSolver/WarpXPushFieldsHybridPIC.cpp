@@ -136,12 +136,23 @@ void WarpX::HybridPICEvolveFields ()
     // Now push the B field from t=n+1/2 to t=n+1 using the n+1/2 quantities
     for (int sub_step = 0; sub_step < sub_steps; sub_step++)
     {
-        m_hybrid_pic_model->BfieldEvolveRK(
-            Bfield_fp, Efield_fp, current_fp, rho_fp_temp,
-            m_edge_lengths, 0.5_rt/sub_steps*dt[0],
-            DtType::SecondHalf, guard_cells.ng_FieldSolver,
-            WarpX::sync_nodal_points
-        );
+        if (include_displacement) {
+            // In this case we will do a subcycled cyclic leapfrog update since
+            // it is expected that light waves will be resolved
+            m_hybrid_pic_model->EvolveEBFieldsDisplacement(
+                Bfield_fp, Efield_fp, current_fp, rho_fp_temp,
+                m_edge_lengths, 0.5_rt/sub_steps*dt[0],
+                guard_cells.ng_FieldSolver,
+                WarpX::sync_nodal_points
+            );
+        } else {
+            m_hybrid_pic_model->BfieldEvolveRK(
+                Bfield_fp, Efield_fp, current_fp, rho_fp_temp,
+                m_edge_lengths, 0.5_rt/sub_steps*dt[0],
+                DtType::SecondHalf, guard_cells.ng_FieldSolver,
+                WarpX::sync_nodal_points
+            );
+        }
     }
 
     // Extrapolate the ion current density to t=n+1 using

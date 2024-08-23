@@ -13,6 +13,7 @@ foreach(D IN LISTS WarpX_DIMS)
         EvolveECTRho.cpp
         FiniteDifferenceSolver.cpp
         HybridPICSolveE.cpp
+        HybridPICEvolveEDisplacement.cpp
         MacroscopicEvolveE.cpp
         ApplySilverMuellerBoundary.cpp
     )

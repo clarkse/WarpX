@@ -31,7 +31,7 @@ void FiniteDifferenceSolver::HybridPICEvolveEDisplacement (
     std::unique_ptr<amrex::MultiFab> const& rhofield,
     std::unique_ptr<amrex::MultiFab> const& Pefield,
     std::array< std::unique_ptr<amrex::MultiFab>, 3 > const& edge_lengths,
-    int lev, HybridPICModel const* hybrid_model,
+    amrex::Real dt, int lev, HybridPICModel const* hybrid_model,
     const bool include_resistivity_term)
 {
     // Select algorithm (The choice of algorithm is a runtime option,
@@ -48,7 +48,7 @@ void FiniteDifferenceSolver::HybridPICEvolveEDisplacement (
 
         HybridPICEvolveEDisplacementCartesian <CartesianYeeAlgorithm> (
             Efield, Jfield, Jifield, Jextfield, Bfield, rhofield, Pefield,
-            edge_lengths, lev, hybrid_model, include_resistivity_term
+            edge_lengths, dt, lev, hybrid_model, include_resistivity_term
         );
 
 #endif
@@ -387,7 +387,7 @@ void FiniteDifferenceSolver::HybridPICEvolveEDisplacementCartesian (
     std::unique_ptr<amrex::MultiFab> const& rhofield,
     std::unique_ptr<amrex::MultiFab> const& Pefield,
     std::array< std::unique_ptr<amrex::MultiFab>, 3 > const& edge_lengths,
-    int lev, HybridPICModel const* hybrid_model,
+    amrex::Real dt, int lev, HybridPICModel const* hybrid_model,
     const bool include_resistivity_term )
 {
 #ifndef AMREX_USE_EB
@@ -398,6 +398,8 @@ void FiniteDifferenceSolver::HybridPICEvolveEDisplacementCartesian (
     amrex::LayoutData<amrex::Real>* cost = WarpX::getCosts(lev);
 
     using namespace ablastr::coarsen::sample;
+
+    auto& warpx = WarpX::GetInstance();
 
     // get hybrid model parameters
     const auto eta = hybrid_model->m_eta;
@@ -439,6 +441,14 @@ void FiniteDifferenceSolver::HybridPICEvolveEDisplacementCartesian (
     // by the nodal mesh.
     auto const& ba = convert(rhofield->boxArray(), IntVect::TheNodeVector());
     MultiFab enE_nodal_mf(ba, rhofield->DistributionMap(), 3, IntVect::TheZeroVector());
+
+    MultiFab grad_Pe_x_mf(Efield[0]->boxArray(), Efield[0]->DistributionMap(), 1, Efield[0]->nGrowVect());
+    MultiFab grad_Pe_y_mf(Efield[1]->boxArray(), Efield[1]->DistributionMap(), 1, Efield[1]->nGrowVect());
+    MultiFab grad_Pe_z_mf(Efield[2]->boxArray(), Efield[2]->DistributionMap(), 1, Efield[2]->nGrowVect());
+
+    MultiFab nabla2_J_x_mf(Efield[0]->boxArray(), Efield[0]->DistributionMap(), 1, Efield[0]->nGrowVect());
+    MultiFab nabla2_J_y_mf(Efield[1]->boxArray(), Efield[1]->DistributionMap(), 1, Efield[1]->nGrowVect());
+    MultiFab nabla2_J_z_mf(Efield[2]->boxArray(), Efield[2]->DistributionMap(), 1, Efield[2]->nGrowVect());
 
     // Loop through the grids, and over the tiles within each grid for the
     // initial, nodal calculation of E
@@ -507,6 +517,70 @@ void FiniteDifferenceSolver::HybridPICEvolveEDisplacementCartesian (
         }
     }
 
+    #ifdef AMREX_USE_OMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
+    for ( MFIter mfi(grad_Pe_x_mf, TilingIfNotGPU()); mfi.isValid(); ++mfi ) {
+        if (cost && WarpX::load_balance_costs_update_algo == LoadBalanceCostsUpdateAlgo::Timers)
+        {
+            amrex::Gpu::synchronize();
+        }
+        auto wt = static_cast<amrex::Real>(amrex::second());
+
+        Array4<Real> const& Pe = Pefield->array(mfi);
+        Array4<Real> const& grad_Pe_x = grad_Pe_x_mf.array(mfi);
+        Array4<Real> const& grad_Pe_y = grad_Pe_y_mf.array(mfi);
+        Array4<Real> const& grad_Pe_z = grad_Pe_z_mf.array(mfi);
+        Array4<Real const> const& Jx = Jfield[0]->const_array(mfi);
+        Array4<Real const> const& Jy = Jfield[1]->const_array(mfi);
+        Array4<Real const> const& Jz = Jfield[2]->const_array(mfi);
+        Array4<Real> const& nabla2_J_x = nabla2_J_x_mf.array(mfi);
+        Array4<Real> const& nabla2_J_y = nabla2_J_y_mf.array(mfi);
+        Array4<Real> const& nabla2_J_z = nabla2_J_z_mf.array(mfi);
+
+        // Extract stencil coefficients
+        Real const * const AMREX_RESTRICT coefs_x = m_stencil_coefs_x.dataPtr();
+        auto const n_coefs_x = static_cast<int>(m_stencil_coefs_x.size());
+        Real const * const AMREX_RESTRICT coefs_y = m_stencil_coefs_y.dataPtr();
+        auto const n_coefs_y = static_cast<int>(m_stencil_coefs_y.size());
+        Real const * const AMREX_RESTRICT coefs_z = m_stencil_coefs_z.dataPtr();
+        auto const n_coefs_z = static_cast<int>(m_stencil_coefs_z.size());
+
+        Box const& tex  = mfi.tilebox(Efield[0]->ixType().toIntVect());
+        Box const& tey  = mfi.tilebox(Efield[1]->ixType().toIntVect());
+        Box const& tez  = mfi.tilebox(Efield[2]->ixType().toIntVect());
+
+        // Loop over the cells and update the nodal E field
+        amrex::ParallelFor(tex, tey, tez, 
+            [=] AMREX_GPU_DEVICE (int i, int j, int k){
+                grad_Pe_x(i,j,k) = T_Algo::UpwardDx(Pe, coefs_x, n_coefs_x, i, j, k);
+                nabla2_J_x(i,j,k) = T_Algo::Dxx(Jx, coefs_x, n_coefs_x, i, j, k);
+            },
+            [=] AMREX_GPU_DEVICE (int i, int j, int k){
+                grad_Pe_y(i,j,k) = T_Algo::UpwardDy(Pe, coefs_y, n_coefs_y, i, j, k);
+                nabla2_J_y(i,j,k) = T_Algo::Dyy(Jy, coefs_y, n_coefs_y, i, j, k);
+            },
+            [=] AMREX_GPU_DEVICE (int i, int j, int k){
+                grad_Pe_z(i,j,k) = T_Algo::UpwardDz(Pe, coefs_z, n_coefs_z, i, j, k);
+                nabla2_J_z(i,j,k) = T_Algo::Dzz(Jz, coefs_z, n_coefs_z, i, j, k);
+            }
+        );
+
+        if (cost && WarpX::load_balance_costs_update_algo == LoadBalanceCostsUpdateAlgo::Timers)
+        {
+            amrex::Gpu::synchronize();
+            wt = static_cast<amrex::Real>(amrex::second()) - wt;
+            amrex::HostDevice::Atomic::Add( &(*cost)[mfi.index()], wt);
+        }
+    }
+
+    grad_Pe_x_mf.FillBoundary(warpx.Geom(lev).periodicity());
+    grad_Pe_y_mf.FillBoundary(warpx.Geom(lev).periodicity());
+    grad_Pe_z_mf.FillBoundary(warpx.Geom(lev).periodicity());
+    nabla2_J_x_mf.FillBoundary(warpx.Geom(lev).periodicity());
+    nabla2_J_y_mf.FillBoundary(warpx.Geom(lev).periodicity());
+    nabla2_J_z_mf.FillBoundary(warpx.Geom(lev).periodicity());
+
     // Loop through the grids, and over the tiles within each grid again
     // for the Yee grid calculation of the E field
 #ifdef AMREX_USE_OMP
@@ -523,26 +597,26 @@ void FiniteDifferenceSolver::HybridPICEvolveEDisplacementCartesian (
         Array4<Real> const& Ex = Efield[0]->array(mfi);
         Array4<Real> const& Ey = Efield[1]->array(mfi);
         Array4<Real> const& Ez = Efield[2]->array(mfi);
+        Array4<Real const> const& Bx = Bfield[0]->const_array(mfi);
+        Array4<Real const> const& By = Bfield[1]->const_array(mfi);
+        Array4<Real const> const& Bz = Bfield[2]->const_array(mfi);
         Array4<Real const> const& Jx = Jfield[0]->const_array(mfi);
         Array4<Real const> const& Jy = Jfield[1]->const_array(mfi);
         Array4<Real const> const& Jz = Jfield[2]->const_array(mfi);
         Array4<Real const> const& enE = enE_nodal_mf.const_array(mfi);
         Array4<Real const> const& rho = rhofield->const_array(mfi);
-        Array4<Real> const& Pe = Pefield->array(mfi);
+        Array4<Real const> const& grad_Pe_x = grad_Pe_x_mf.const_array(mfi);
+        Array4<Real const> const& grad_Pe_y = grad_Pe_y_mf.const_array(mfi);
+        Array4<Real const> const& grad_Pe_z = grad_Pe_z_mf.const_array(mfi);
+        Array4<Real const> const& nabla2_J_x = nabla2_J_x_mf.const_array(mfi);
+        Array4<Real const> const& nabla2_J_y = nabla2_J_y_mf.const_array(mfi);
+        Array4<Real const> const& nabla2_J_z = nabla2_J_z_mf.const_array(mfi);
 
 #ifdef AMREX_USE_EB
         amrex::Array4<amrex::Real> const& lx = edge_lengths[0]->array(mfi);
         amrex::Array4<amrex::Real> const& ly = edge_lengths[1]->array(mfi);
         amrex::Array4<amrex::Real> const& lz = edge_lengths[2]->array(mfi);
 #endif
-
-        // Extract stencil coefficients
-        Real const * const AMREX_RESTRICT coefs_x = m_stencil_coefs_x.dataPtr();
-        auto const n_coefs_x = static_cast<int>(m_stencil_coefs_x.size());
-        Real const * const AMREX_RESTRICT coefs_y = m_stencil_coefs_y.dataPtr();
-        auto const n_coefs_y = static_cast<int>(m_stencil_coefs_y.size());
-        Real const * const AMREX_RESTRICT coefs_z = m_stencil_coefs_z.dataPtr();
-        auto const n_coefs_z = static_cast<int>(m_stencil_coefs_z.size());
 
         Box const& tex  = mfi.tilebox(Efield[0]->ixType().toIntVect());
         Box const& tey  = mfi.tilebox(Efield[1]->ixType().toIntVect());
@@ -561,32 +635,72 @@ void FiniteDifferenceSolver::HybridPICEvolveEDisplacementCartesian (
                 Real rho_val = Interp(rho, nodal, Ex_stag, coarsen, i, j, k, 0);
 
                 // Interpolate current to appropriate staggering to match E field
-                Real jtot_val = 0._rt;
-                if (include_resistivity_term && resistivity_has_J_dependence) {
-                    const Real jx_val = Interp(Jx, Jx_stag, Ex_stag, coarsen, i, j, k, 0);
-                    const Real jy_val = Interp(Jy, Jy_stag, Ex_stag, coarsen, i, j, k, 0);
-                    const Real jz_val = Interp(Jz, Jz_stag, Ex_stag, coarsen, i, j, k, 0);
-                    jtot_val = std::sqrt(jx_val*jx_val + jy_val*jy_val + jz_val*jz_val);
-                }
+                const Real jx_val = Interp(Jx, Jx_stag, Ex_stag, coarsen, i, j, k, 0);
+                const Real jy_val = Interp(Jy, Jy_stag, Ex_stag, coarsen, i, j, k, 0);
+                const Real jz_val = Interp(Jz, Jz_stag, Ex_stag, coarsen, i, j, k, 0);
+                const Real jtot_val = std::sqrt(jx_val*jx_val + jy_val*jy_val + jz_val*jz_val);
 
                 // safety condition since we divide by rho_val later
-                if (rho_val < rho_floor) { rho_val = rho_floor; }
+                // This is now ignored since displacement current introduced
+                //if (rho_val < rho_floor) { rho_val = rho_floor; }
 
-                // Get the gradient of the electron pressure
-                auto grad_Pe = T_Algo::UpwardDx(Pe, coefs_x, n_coefs_x, i, j, k);
+                // Interpolate the electron pressure gradient to Ex staggering 
+                auto grad_Pe_x_val = grad_Pe_x(i, j, k);
+                auto grad_Pe_y_val = Interp(grad_Pe_y, Ey_stag, Ex_stag, coarsen, i, j, k, 0);
+                auto grad_Pe_z_val = Interp(grad_Pe_z, Ez_stag, Ex_stag, coarsen, i, j, k, 0);
 
-                // interpolate the nodal neE values to the Yee grid
+                // interpolate the nodal enE values to the Yee grid for Ex staggering
                 auto enE_x = Interp(enE, nodal, Ex_stag, coarsen, i, j, k, 0);
+                auto enE_y = Interp(enE, nodal, Ex_stag, coarsen, i, j, k, 1);
+                auto enE_z = Interp(enE, nodal, Ex_stag, coarsen, i, j, k, 2);
 
-                Ex(i, j, k) = (enE_x - grad_Pe) / rho_val;
+                // Interpolate B values to Ex staggering
+                auto Bx_val = Interp(Bx, Bx_stag, Ex_stag, coarsen, i, j, k, 0);
+                auto By_val = Interp(By, By_stag, Ex_stag, coarsen, i, j, k, 0);
+                auto Bz_val = Interp(Bz, Bz_stag, Ex_stag, coarsen, i, j, k, 0);
+
+                // Store old E values
+                const Real Exo = Ex(i,j,k);
+                const Real Eyo = Interp(Ey, Ey_stag, Ex_stag, coarsen, i, j, k, 0);
+                const Real Ezo = Interp(Ez, Ez_stag, Ex_stag, coarsen, i, j, k, 0);
+
+                Real Jtilde_x = enE_x - grad_Pe_x_val;
+                Real Jtilde_y = enE_y - grad_Pe_y_val;
+                Real Jtilde_z = enE_z - grad_Pe_z_val;
+
+                const auto eta_val = eta(rho_val, jtot_val);
 
                 // Add resistivity only if E field value is used to update B
-                if (include_resistivity_term) { Ex(i, j, k) += eta(rho_val, jtot_val) * Jx(i, j, k); }
+                if (include_resistivity_term) { 
+                    Jtilde_x += rho_val * eta_val * jx_val; 
+                    Jtilde_y += rho_val * eta_val * jy_val;
+                    Jtilde_z += rho_val * eta_val * jz_val;
+                }
 
                 if (include_hyper_resistivity_term) {
-                    auto nabla2Jx = T_Algo::Dxx(Jx, coefs_x, n_coefs_x, i, j, k);
-                    Ex(i, j, k) -= eta_h * nabla2Jx;
+                    auto nabla2_J_x_val = nabla2_J_x(i, j, k);
+                    auto nabla2_J_y_val = Interp(nabla2_J_y, Ey_stag, Ex_stag, coarsen, i, j, k, 0);
+                    auto nabla2_J_z_val = Interp(nabla2_J_z, Ez_stag, Ex_stag, coarsen, i, j, k, 0);
+
+                    Jtilde_x -= rho_val * eta_h * nabla2_J_x_val;
+                    Jtilde_y -= rho_val * eta_h * nabla2_J_y_val;
+                    Jtilde_z -= rho_val * eta_h * nabla2_J_z_val;
                 }
+
+                // Include explicit terms for displacement current
+                Jtilde_x -= 0.5_rt * rho_val + PhysConst::ep0 / dt * (eta_val*Exo + Bz_val*Eyo - By_val*Ezo); 
+                Jtilde_y -= PhysConst::ep0 / dt * (eta_val*Eyo - Bz_val*Exo + Bx_val*Ezo);
+                Jtilde_z -= PhysConst::ep0 / dt * (eta_val*Ezo + By_val*Exo - Bx_val*Eyo);
+
+                // Calculate inverse for semi-implicit advance
+                Real d = 0.5_rt * rho_val - PhysConst::ep0 / dt * eta_val;
+                Real coeff = 1.0_rt / (d * (d*d + Bx_val*Bx_val + By_val*By_val + Bz_val*Bz_val));
+
+                Ex(i,j,k) = coeff * (
+                    (d*d + Bx_val*Bx_val) * Jtilde_x
+                    + (Bx_val*By_val + d*Bz_val) * Jtilde_y
+                    + (Bx_val*Bz_val - d*By_val) * Jtilde_z
+                    );
             },
 
             // Ey calculation
@@ -605,32 +719,72 @@ void FiniteDifferenceSolver::HybridPICEvolveEDisplacementCartesian (
                 Real rho_val = Interp(rho, nodal, Ey_stag, coarsen, i, j, k, 0);
 
                 // Interpolate current to appropriate staggering to match E field
-                Real jtot_val = 0._rt;
-                if (include_resistivity_term && resistivity_has_J_dependence) {
-                    const Real jx_val = Interp(Jx, Jx_stag, Ey_stag, coarsen, i, j, k, 0);
-                    const Real jy_val = Interp(Jy, Jy_stag, Ey_stag, coarsen, i, j, k, 0);
-                    const Real jz_val = Interp(Jz, Jz_stag, Ey_stag, coarsen, i, j, k, 0);
-                    jtot_val = std::sqrt(jx_val*jx_val + jy_val*jy_val + jz_val*jz_val);
-                }
-
+                const Real jx_val = Interp(Jx, Jx_stag, Ey_stag, coarsen, i, j, k, 0);
+                const Real jy_val = Interp(Jy, Jy_stag, Ey_stag, coarsen, i, j, k, 0);
+                const Real jz_val = Interp(Jz, Jz_stag, Ey_stag, coarsen, i, j, k, 0);
+                const Real jtot_val = std::sqrt(jx_val*jx_val + jy_val*jy_val + jz_val*jz_val);
+                
                 // safety condition since we divide by rho_val later
-                if (rho_val < rho_floor) { rho_val = rho_floor; }
+                // This is now ignored since displacement current introduced
+                //if (rho_val < rho_floor) { rho_val = rho_floor; }
 
-                // Get the gradient of the electron pressure
-                auto grad_Pe = T_Algo::UpwardDy(Pe, coefs_y, n_coefs_y, i, j, k);
+                // Interpolate the electron pressure gradient to Ex staggering 
+                auto grad_Pe_x_val = Interp(grad_Pe_x, Ex_stag, Ey_stag, coarsen, i, j, k, 0);
+                auto grad_Pe_y_val = grad_Pe_y(i, j, k);
+                auto grad_Pe_z_val = Interp(grad_Pe_z, Ez_stag, Ey_stag, coarsen, i, j, k, 0);
 
-                // interpolate the nodal neE values to the Yee grid
+                // interpolate the nodal enE values to the Yee grid for Ex staggering
+                auto enE_x = Interp(enE, nodal, Ey_stag, coarsen, i, j, k, 0);
                 auto enE_y = Interp(enE, nodal, Ey_stag, coarsen, i, j, k, 1);
+                auto enE_z = Interp(enE, nodal, Ey_stag, coarsen, i, j, k, 2);
 
-                Ey(i, j, k) = (enE_y - grad_Pe) / rho_val;
+                // Interpolate B values to Ex staggering
+                auto Bx_val = Interp(Bx, Bx_stag, Ey_stag, coarsen, i, j, k, 0);
+                auto By_val = Interp(By, By_stag, Ey_stag, coarsen, i, j, k, 0);
+                auto Bz_val = Interp(Bz, Bz_stag, Ey_stag, coarsen, i, j, k, 0);
+
+                // Store old E values
+                const Real Exo = Interp(Ex, Ex_stag, Ey_stag, coarsen, i, j, k, 0);
+                const Real Eyo = Ey(i,j,k);
+                const Real Ezo = Interp(Ez, Ez_stag, Ey_stag, coarsen, i, j, k, 0);
+
+                Real Jtilde_x = enE_x - grad_Pe_x_val;
+                Real Jtilde_y = enE_y - grad_Pe_y_val;
+                Real Jtilde_z = enE_z - grad_Pe_z_val;
+
+                const auto eta_val = eta(rho_val, jtot_val);
 
                 // Add resistivity only if E field value is used to update B
-                if (include_resistivity_term) { Ey(i, j, k) += eta(rho_val, jtot_val) * Jy(i, j, k); }
+                if (include_resistivity_term) { 
+                    Jtilde_x += rho_val * eta_val * jx_val; 
+                    Jtilde_y += rho_val * eta_val * jy_val;
+                    Jtilde_z += rho_val * eta_val * jz_val;
+                }
 
                 if (include_hyper_resistivity_term) {
-                    auto nabla2Jy = T_Algo::Dyy(Jy, coefs_y, n_coefs_y, i, j, k);
-                    Ey(i, j, k) -= eta_h * nabla2Jy;
+                    auto nabla2_J_x_val = Interp(nabla2_J_x, Ex_stag, Ey_stag, coarsen, i, j, k, 0);
+                    auto nabla2_J_y_val = nabla2_J_y(i, j, k);
+                    auto nabla2_J_z_val = Interp(nabla2_J_z, Ez_stag, Ey_stag, coarsen, i, j, k, 0);
+
+                    Jtilde_x -= rho_val * eta_h * nabla2_J_x_val;
+                    Jtilde_y -= rho_val * eta_h * nabla2_J_y_val;
+                    Jtilde_z -= rho_val * eta_h * nabla2_J_z_val;
                 }
+
+                // Include explicit terms for displacement current
+                Jtilde_x -= PhysConst::ep0 / dt * (eta_val*Exo + Bz_val*Eyo - By_val*Ezo); 
+                Jtilde_y -= 0.5_rt * rho_val + PhysConst::ep0 / dt * (eta_val*Eyo - Bz_val*Exo + Bx_val*Ezo);
+                Jtilde_z -= PhysConst::ep0 / dt * (eta_val*Ezo + By_val*Exo - Bx_val*Eyo);
+
+                // Calculate inverse for semi-implicit advance
+                Real d = 0.5_rt * rho_val - PhysConst::ep0 / dt * eta_val;
+                Real coeff = 1.0_rt / (d * (d*d + Bx_val*Bx_val + By_val*By_val + Bz_val*Bz_val));
+
+                Ey(i,j,k) = coeff * (
+                    (Bx_val*By_val - d*Bz_val) * Jtilde_x
+                    + (d*d + By_val*By_val) * Jtilde_y
+                    + (By_val*Bz_val + d*Bx_val) * Jtilde_z
+                    );
             },
 
             // Ez calculation
@@ -639,36 +793,77 @@ void FiniteDifferenceSolver::HybridPICEvolveEDisplacementCartesian (
                 // Skip field solve if this cell is fully covered by embedded boundaries
                 if (lz(i,j,k) <= 0) { return; }
 #endif
+                
                 // Interpolate to get the appropriate charge density in space
                 Real rho_val = Interp(rho, nodal, Ez_stag, coarsen, i, j, k, 0);
 
                 // Interpolate current to appropriate staggering to match E field
-                Real jtot_val = 0._rt;
-                if (include_resistivity_term && resistivity_has_J_dependence) {
-                    const Real jx_val = Interp(Jx, Jx_stag, Ez_stag, coarsen, i, j, k, 0);
-                    const Real jy_val = Interp(Jy, Jy_stag, Ez_stag, coarsen, i, j, k, 0);
-                    const Real jz_val = Interp(Jz, Jz_stag, Ez_stag, coarsen, i, j, k, 0);
-                    jtot_val = std::sqrt(jx_val*jx_val + jy_val*jy_val + jz_val*jz_val);
-                }
+                const Real jx_val = Interp(Jx, Jx_stag, Ez_stag, coarsen, i, j, k, 0);
+                const Real jy_val = Interp(Jy, Jy_stag, Ez_stag, coarsen, i, j, k, 0);
+                const Real jz_val = Interp(Jz, Jz_stag, Ez_stag, coarsen, i, j, k, 0);
+                const Real jtot_val = std::sqrt(jx_val*jx_val + jy_val*jy_val + jz_val*jz_val);
 
                 // safety condition since we divide by rho_val later
-                if (rho_val < rho_floor) { rho_val = rho_floor; }
+                // This is now ignored since displacement current introduced
+                //if (rho_val < rho_floor) { rho_val = rho_floor; }
 
-                // Get the gradient of the electron pressure
-                auto grad_Pe = T_Algo::UpwardDz(Pe, coefs_z, n_coefs_z, i, j, k);
+                // Interpolate the electron pressure gradient to Ex staggering 
+                auto grad_Pe_x_val = Interp(grad_Pe_x, Ex_stag, Ez_stag, coarsen, i, j, k, 0);
+                auto grad_Pe_y_val = Interp(grad_Pe_y, Ey_stag, Ez_stag, coarsen, i, j, k, 0);
+                auto grad_Pe_z_val = grad_Pe_z(i, j, k);
 
-                // interpolate the nodal neE values to the Yee grid
+                // interpolate the nodal enE values to the Yee grid for Ex staggering
+                auto enE_x = Interp(enE, nodal, Ez_stag, coarsen, i, j, k, 0);
+                auto enE_y = Interp(enE, nodal, Ez_stag, coarsen, i, j, k, 1);
                 auto enE_z = Interp(enE, nodal, Ez_stag, coarsen, i, j, k, 2);
 
-                Ez(i, j, k) = (enE_z - grad_Pe) / rho_val;
+                // Interpolate B values to Ex staggering
+                auto Bx_val = Interp(Bx, Bx_stag, Ez_stag, coarsen, i, j, k, 0);
+                auto By_val = Interp(By, By_stag, Ez_stag, coarsen, i, j, k, 0);
+                auto Bz_val = Interp(Bz, Bz_stag, Ez_stag, coarsen, i, j, k, 0);
+
+                // Store old E values
+                const Real Exo = Interp(Ex, Ex_stag, Ez_stag, coarsen, i, j, k, 0);
+                const Real Eyo = Interp(Ey, Ey_stag, Ez_stag, coarsen, i, j, k, 0);
+                const Real Ezo = Ez(i,j,k);
+
+                Real Jtilde_x = enE_x - grad_Pe_x_val;
+                Real Jtilde_y = enE_y - grad_Pe_y_val;
+                Real Jtilde_z = enE_z - grad_Pe_z_val;
+
+                const auto eta_val = eta(rho_val, jtot_val);
 
                 // Add resistivity only if E field value is used to update B
-                if (include_resistivity_term) { Ez(i, j, k) += eta(rho_val, jtot_val) * Jz(i, j, k); }
+                if (include_resistivity_term) { 
+                    Jtilde_x += rho_val * eta_val * jx_val; 
+                    Jtilde_y += rho_val * eta_val * jy_val;
+                    Jtilde_z += rho_val * eta_val * jz_val;
+                }
 
                 if (include_hyper_resistivity_term) {
-                    auto nabla2Jz = T_Algo::Dzz(Jz, coefs_z, n_coefs_z, i, j, k);
-                    Ez(i, j, k) -= eta_h * nabla2Jz;
+                    auto nabla2_J_x_val = Interp(nabla2_J_x, Ex_stag, Ez_stag, coarsen, i, j, k, 0);
+                    auto nabla2_J_y_val = Interp(nabla2_J_y, Ey_stag, Ez_stag, coarsen, i, j, k, 0);
+                    auto nabla2_J_z_val = nabla2_J_z(i, j, k);
+
+                    Jtilde_x -= rho_val * eta_h * nabla2_J_x_val;
+                    Jtilde_y -= rho_val * eta_h * nabla2_J_y_val;
+                    Jtilde_z -= rho_val * eta_h * nabla2_J_z_val;
                 }
+
+                // Include explicit terms for displacement current
+                Jtilde_x -= PhysConst::ep0 / dt * (eta_val*Exo + Bz_val*Eyo - By_val*Ezo); 
+                Jtilde_y -= PhysConst::ep0 / dt * (eta_val*Eyo - Bz_val*Exo + Bx_val*Ezo);
+                Jtilde_z -= 0.5_rt * rho_val + PhysConst::ep0 / dt * (eta_val*Ezo + By_val*Exo - Bx_val*Eyo);
+
+                // Calculate inverse for semi-implicit advance
+                Real d = 0.5_rt * rho_val - PhysConst::ep0 / dt * eta_val;
+                Real coeff = 1.0_rt / (d * (d*d + Bx_val*Bx_val + By_val*By_val + Bz_val*Bz_val));
+
+                Ez(i,j,k) = coeff * (
+                    (Bx_val*Bz_val + d*By_val) * Jtilde_x
+                    + (By_val*Bz_val - d*Bx_val) * Jtilde_y
+                    + (d*d + Bz_val*Bz_val) * Jtilde_z
+                    );
             }
         );
 

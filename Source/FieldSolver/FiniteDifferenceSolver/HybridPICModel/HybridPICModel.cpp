@@ -715,6 +715,7 @@ void HybridPICModel::EvolveEBFieldsDisplacement (
     amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& edge_lengths,
     amrex::Real dt,
     IntVect ng, std::optional<bool> nodal_sync )
+{
     auto& warpx = WarpX::GetInstance();
     for (int lev = 0; lev <= warpx.finestLevel(); ++lev)
     {
@@ -723,6 +724,7 @@ void HybridPICModel::EvolveEBFieldsDisplacement (
             ng, nodal_sync
         );
     }
+}
 
 void HybridPICModel::EvolveEBFieldsDisplacement (
     amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>>& Bfield,
@@ -730,23 +732,31 @@ void HybridPICModel::EvolveEBFieldsDisplacement (
     amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& Jfield,
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> const& rhofield,
     amrex::Vector<std::array< std::unique_ptr<amrex::MultiFab>, 3>> const& edge_lengths,
-    amrex::Real dt, int lev, DtType dt_type,
+    amrex::Real dt, int lev,
     IntVect ng, std::optional<bool> nodal_sync )
 {
     auto& warpx = WarpX::GetInstance();
 
     // Push forward the B-field first half time step using Faraday's law
     warpx.EvolveB(lev, 0.5*dt, DtType::FirstHalf);
+    warpx.ApplyBfieldBoundary(lev, PatchType::fine, DtType::FirstHalf);
     warpx.FillBoundaryB(lev, ng, nodal_sync);
 
     // Calculate J = curl x B / mu0
     CalculateCurrentAmpere(Bfield, edge_lengths);
 
-    // Calculate the E-field from Ohm's law
-    HybridPICEvolveEDisplacement(Efield, Jfield, Bfield, rhofield, edge_lengths, true);
-    warpx.FillBoundaryE(ng, nodal_sync);
+    // Solve E field in regular cells
+    warpx.get_pointer_fdtd_solver_fp(lev)->HybridPICEvolveEDisplacement(
+        Efield[lev], current_fp_ampere[lev], Jfield[lev], current_fp_external[lev],
+        Bfield[lev], rhofield[lev],
+        electron_pressure_fp[lev],
+        edge_lengths[lev], dt, lev, this, true
+    );
+    warpx.ApplyEfieldBoundary(lev, PatchType::fine);
+    warpx.FillBoundaryE(lev, ng, nodal_sync);
 
     // Push forward the B-field using Faraday's law
     warpx.EvolveB(lev, 0.5*dt, DtType::SecondHalf);
+    warpx.ApplyBfieldBoundary(lev, PatchType::fine, DtType::SecondHalf);
     warpx.FillBoundaryB(ng, nodal_sync);
 }
