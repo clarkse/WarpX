@@ -177,11 +177,13 @@ void WarpX::HybridPICEvolveFields ()
     m_hybrid_pic_model->CalculateElectronPressure(DtType::Full);
 
     // Update the E field to t=n+1 using the extrapolated J_i^n+1 value
-    m_hybrid_pic_model->CalculateCurrentAmpere(Bfield_fp, m_edge_lengths);
-    m_hybrid_pic_model->HybridPICSolveE(
-        Efield_fp, current_fp_temp, Bfield_fp, rho_fp, m_edge_lengths, false
-    );
-    FillBoundaryE(guard_cells.ng_FieldSolver, WarpX::sync_nodal_points);
+    if (!include_displacement) {
+        m_hybrid_pic_model->CalculateCurrentAmpere(Bfield_fp, m_edge_lengths);
+        m_hybrid_pic_model->HybridPICSolveE(
+            Efield_fp, current_fp_temp, Bfield_fp, rho_fp, m_edge_lengths, false
+        );
+        FillBoundaryE(guard_cells.ng_FieldSolver, WarpX::sync_nodal_points);
+    }
 
     // Copy the rho^{n+1} values to rho_fp_temp and the J_i^{n+1/2} values to
     // current_fp_temp since at the next step those values will be needed as

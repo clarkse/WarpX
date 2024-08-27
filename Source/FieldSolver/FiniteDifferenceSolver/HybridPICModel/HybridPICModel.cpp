@@ -744,6 +744,16 @@ void HybridPICModel::EvolveEBFieldsDisplacement (
 
     // Calculate J = curl x B / mu0
     CalculateCurrentAmpere(Bfield, edge_lengths);
+    warpx.ApplyJfieldBoundary(
+        lev,
+        current_fp_ampere[lev][0].get(),
+        current_fp_ampere[lev][1].get(),
+        current_fp_ampere[lev][2].get(),
+        PatchType::fine
+        );
+    current_fp_ampere[lev][0]->FillBoundary(warpx.Geom(lev).periodicity());
+    current_fp_ampere[lev][1]->FillBoundary(warpx.Geom(lev).periodicity());
+    current_fp_ampere[lev][2]->FillBoundary(warpx.Geom(lev).periodicity());
 
     // Solve E field in regular cells
     warpx.get_pointer_fdtd_solver_fp(lev)->HybridPICEvolveEDisplacement(
@@ -759,4 +769,17 @@ void HybridPICModel::EvolveEBFieldsDisplacement (
     warpx.EvolveB(lev, 0.5*dt, DtType::SecondHalf);
     warpx.ApplyBfieldBoundary(lev, PatchType::fine, DtType::SecondHalf);
     warpx.FillBoundaryB(ng, nodal_sync);
+
+    // Calculate J = curl x B / mu0
+    CalculateCurrentAmpere(Bfield, edge_lengths);
+    warpx.ApplyJfieldBoundary(
+        lev,
+        current_fp_ampere[lev][0].get(),
+        current_fp_ampere[lev][1].get(),
+        current_fp_ampere[lev][2].get(),
+        PatchType::fine
+        );
+    current_fp_ampere[lev][0]->FillBoundary(warpx.Geom(lev).periodicity());
+    current_fp_ampere[lev][1]->FillBoundary(warpx.Geom(lev).periodicity());
+    current_fp_ampere[lev][2]->FillBoundary(warpx.Geom(lev).periodicity());
 }

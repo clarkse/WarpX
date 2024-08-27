@@ -286,6 +286,19 @@ class FiniteDifferenceSolver
             int lev
         );
 
+        template<typename T_Algo>
+        void HybridPICEvolveEDisplacementCylindrical (
+            std::array< std::unique_ptr<amrex::MultiFab>, 3>& Efield,
+            std::array< std::unique_ptr<amrex::MultiFab>, 3> const& Jfield,
+            std::array< std::unique_ptr<amrex::MultiFab>, 3> const& Jifield,
+            std::array< std::unique_ptr<amrex::MultiFab>, 3 > const& Jextfield,
+            std::array< std::unique_ptr<amrex::MultiFab>, 3> const& Bfield,
+            std::unique_ptr<amrex::MultiFab> const& rhofield,
+            std::unique_ptr<amrex::MultiFab> const& Pefield,
+            std::array< std::unique_ptr<amrex::MultiFab>, 3 > const& edge_lengths,
+            amrex::Real dt, int lev, HybridPICModel const* hybrid_model,
+            bool include_resistivity_term );
+
 #else
         template< typename T_Algo >
         void EvolveBCartesian (
